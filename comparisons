@@ -1,0 +1,131 @@
+import os
+import json
+import numpy as np
+from sklearn.model_selection import train_test_split
+from pMRF_demo import *
+from sklearn.metrics import mean_squared_error
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.neighbors import KNeighborsRegressor
+import tensorflow as tf
+from tensorflow.keras import Sequential
+from tensorflow.keras.layers import Dense
+
+# 创建存储结果的文件夹
+if not os.path.exists("simulation_results4"):
+    os.mkdir("simulation_results4")
+
+# 固定参数
+p = 100          # 特征数
+M = 1000         # 随机森林的树数量
+N = 100           # 每组实验重复次数
+n_list = [100, 200, 300, 500, 1000]  # 样本数
+max_features_list = [60, 70, 80, 90]  # max_features 可选值
+scenario = 'DGP3'
+
+# Boosted Trees Model
+def boosted_trees_model(X_train, y_train, X_test):
+    model = GradientBoostingRegressor(n_estimators=1000, learning_rate=0.05, max_depth=20, random_state=42)
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    return y_pred, model
+
+# Ensemble Model
+def ensemble_model(X_train, y_train, X_test):
+    model1 = LinearRegression().fit(X_train, y_train)
+    model2 = DecisionTreeRegressor(max_depth=5).fit(X_train, y_train)
+    model3 = KNeighborsRegressor(n_neighbors=5).fit(X_train, y_train)
+
+    # 单独预测
+    y_pred1 = model1.predict(X_test)
+    y_pred2 = model2.predict(X_test)
+    y_pred3 = model3.predict(X_test)
+
+    # 求平均作为最终预测
+    y_pred_ensemble = (y_pred1 + y_pred2 + y_pred3) / 3
+    return y_pred_ensemble, [model1, model2, model3]
+
+# One Layer MLP Model
+def one_layer_mlp_model(X_train, y_train, X_test):
+    model = Sequential([
+        Dense(64, activation='relu', input_shape=(X_train.shape[1],)),
+        Dense(32, activation='relu'),
+        Dense(1)
+    ])
+    model.compile(optimizer='adam', loss='mse')
+    model.fit(X_train, y_train, epochs=100, verbose=0, batch_size=32)
+    y_pred = model.predict(X_test).flatten()
+    return y_pred, model
+
+# 结果存储初始化
+for max_features in max_features_list:
+    for n in n_list:
+        print(f"Running: max_features={max_features}, n={n}")
+
+        rmse_rf_list = []
+        rmse_mrf_list = []
+        rmse_boosted_list = []
+        rmse_ensemble_list = []
+        rmse_mlp_list = []
+
+        for i in range(N):
+            # 数据生成
+            if scenario == 'DGP1':
+                X, y = DGP_1(n=n, p=p)
+            elif scenario == 'DGP2':
+                X, y = DGP_2(n=n, p=p)
+            elif scenario == 'DGP3':
+                X, y = DGP_3(n=n, p=p)
+
+            # 分割训练集和测试集
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=i)
+
+            # RF 训练和预测
+            trees, trees_pred, km, sigma2 = RF_train(X=X_train, y=y_train, M=M, max_depth=None, max_features=max_features)
+            y_pred_rf = RF_predict(X=X_test, trees=trees)
+            rmse_rf = np.sqrt(np.mean((y_test - y_pred_rf) ** 2))
+            rmse_rf_list.append(rmse_rf)
+
+            # MRF 训练和预测
+            sigma2_mean = np.mean(sigma2)
+            w_mrf = cp_solver_MRF(y=y_train, y_preds=trees_pred, km=km, sigma2_mean=sigma2_mean)
+            y_pred_mrf = RF_predict_weighted(X=X_test, trees=trees, w=w_mrf)
+            rmse_mrf = np.sqrt(np.mean((y_test - y_pred_mrf) ** 2))
+            rmse_mrf_list.append(rmse_mrf)
+
+            # Boosted Trees
+            y_pred_boosted, _ = boosted_trees_model(X_train, y_train, X_test)
+            rmse_boosted = np.sqrt(np.mean((y_test - y_pred_boosted) ** 2))
+            rmse_boosted_list.append(rmse_boosted)
+
+            # Ensemble Model
+            y_pred_ensemble, _ = ensemble_model(X_train, y_train, X_test)
+            rmse_ensemble = np.sqrt(np.mean((y_test - y_pred_ensemble) ** 2))
+            rmse_ensemble_list.append(rmse_ensemble)
+
+            # One Layer MLP
+            y_pred_mlp, _ = one_layer_mlp_model(X_train, y_train, X_test)
+            rmse_mlp = np.sqrt(np.mean((y_test - y_pred_mlp) ** 2))
+            rmse_mlp_list.append(rmse_mlp)
+
+        # 结果存储
+        results = {
+            "rmse_rf_list": rmse_rf_list,
+            "rmse_mrf_list": rmse_mrf_list,
+            "rmse_boosted_list": rmse_boosted_list,
+            "rmse_ensemble_list": rmse_ensemble_list,
+            "rmse_mlp_list": rmse_mlp_list,
+            "params": {
+                "n": n,
+                "max_features": max_features,
+                "scenario": scenario,
+                "p": p,
+                "M": M,
+                "N": N
+            }
+        }
+        # 保存为 JSON 文件
+        file_name = f"simulation_results4/rmse_{scenario}_n{n}_max_features_{max_features}.json"
+        with open(file_name, "w") as f:
+            json.dump(results, f)
