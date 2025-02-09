@@ -10,6 +10,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import time 
 import math
 from sklearn.model_selection import train_test_split
 from ADMM_pMRF import Penalty, close_form, cp_solver_1, cp_solver_2
@@ -196,7 +197,7 @@ def cp_solver_MRF(y:np.ndarray, y_preds:np.ndarray, km:np.ndarray, sigma2_mean:f
 
     # 特别小的先给压成0
     ans = z.value
-    ans[abs(ans)<1e-6] = 0 
+    ans[abs(ans)<1e-10] = 0 
     ans = ans/sum(ans)
     return (ans)
 
@@ -265,21 +266,22 @@ def ADMM_algorithm_pMRF(y:np.ndarray,y_preds:np.ndarray,km:np.ndarray,sigma2_mea
         z1_old = z1_new + 0
         z2_old = z2_new + 0
 
-        print(prime_residuals,dual_residuals,error,count)
+        # print(prime_residuals,dual_residuals,error,count)
+
         # 根据prime_residuals和dual_residuals更新beta
         """
         参考Boyd 2010 ADMM 中的 3.4.1 Varying Penalty Parameter
         """
         if beta_vary:
             if prime_residuals > 10 * dual_residuals:
-                print("beta 增大")
+                # print("beta 增大")
                 beta = beta * 2
             elif prime_residuals < 0.1 * dual_residuals:
-                print("beta 减小")
+                # print("beta 减小")
                 beta = beta * 0.5
 
 
-    w[abs(w)<1e-10] = 0 
+    w[abs(w)<1e-6] = 0 
     w = w/sum(w)
     print(error,count)
     
@@ -301,7 +303,7 @@ def grid_search(y:np.ndarray,y_preds:np.ndarray,km:np.ndarray,sigma2_mean:float,
     alpha = 3.7
     theta  =  0.05
     # hard code 给 或者 外部传入哦度可以
-    beta_list = [0.1,1,10,100]
+    beta_list = [100,300,1000,3000]
 
     count_list = []
     cost_list = []
@@ -318,36 +320,50 @@ def grid_search(y:np.ndarray,y_preds:np.ndarray,km:np.ndarray,sigma2_mean:float,
     # 找到目标函数的最优值对应的beta 和 w
     beta_opt = beta_list[np.argmin(cost_list)]
     w_opt = w_list[np.argmin(cost_list)]
+    print(count_list)
 
     return beta_opt, w_opt,cost_list,w_list,count_list
 
-def cv_search(X_val, y_train, y_val, trees,trees_pred):
+def cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred):
     # 
     lambda_list = [0.0001,0.0005,0.001,0.002,0.003,0.005,0.01,0.02,0.03,0.05,0.1]
     rmse_list = []
     w_opt_list = []
+    rmse_list_test = []
     for lambda_ in lambda_list:
+        print('-'*10)
         print(lambda_)
-        beta_opt, w_opt,cost_list,w_list = grid_search(y_train,trees_pred,km,sigma2_mean,w_init,lambda_,method,tol = 1e-4,K = 100)
+        beta_opt, w_opt,cost_list,w_list,count_list = grid_search(y_train,trees_pred,km,sigma2_mean,w_init,lambda_,method,tol = 1e-3,K = 300)
+        w_opt_list.append(w_opt)
 
         # 在val上的表现
         y_pred_val = RF_predict_weighted(X=X_val, trees=trees, w=w_opt)
         rmse = np.sqrt(np.mean((y_val - y_pred_val)**2))
         rmse_list.append(rmse)
-        w_opt_list.append(w_opt)
+
+
+        # 在test 上的表现 
+        y_pred_test = RF_predict_weighted(X=X_test, trees=trees, w=w_opt)
+        rmse_test = np.sqrt(np.mean((y_test - y_pred_test)**2))
+        rmse_list_test.append(rmse_test)
+
+
 
 
     idx = np.argmin(np.array(rmse_list))
     best_lambda = lambda_list[idx]
     best_w = w_opt_list[idx]
 
-    return(best_lambda,best_w)
+    return(best_lambda,best_w,w_opt_list,rmse_list,rmse_list_test)
 
 #  σ2 is an estimation of σ2 given the training sample and
 #  km is the number of variables used in constructing the m-th tree predictor, indicating the degree of freedom of the m-th tree.
 #  km 代表树中 根结点和叶结点 的个数
 
-
+def calc_rmse(X,y,trees,w):
+    y_pred = RF_predict_weighted(X=X, trees=trees, w=w)
+    rmse = np.sqrt(np.mean((y - y_pred)**2))
+    return  rmse
 
 
 if __name__ == "__main__":
@@ -366,7 +382,7 @@ if __name__ == "__main__":
     X_val, X_test, y_val, y_test = train_test_split(X_test, y_test, test_size=0.5)
 
     # 随机森林拟合
-    [trees, trees_pred, km, sigma2, tree_depth, tree_leaf_num] = RF_train(X=X_train, y=y_train, M=500, max_depth=None, max_features=100)
+    [trees, trees_pred, km, sigma2, tree_depth, tree_leaf_num] = RF_train(X=X_train, y=y_train, M=1000, max_depth=None, max_features=100)
     
     # 在val上的预测结果
 
@@ -393,8 +409,9 @@ if __name__ == "__main__":
 
     # 求解MRF
     z_value = cp_solver_MRF(y_train, trees_pred, km, sigma2_mean)
-    print(z_value.shape)
-
+    print(f"shape of z_value :{z_value.shape}")
+    print(f"number of active weight z_value :{np.sum(z_value>0)}")
+    print(calc_rmse(X_test,y_test,trees,z_value))
 
     # 求解pMRF
     # 给lambda
@@ -402,19 +419,41 @@ if __name__ == "__main__":
     # 给method
 
     lamb =  0.01
-    beta = 10
+    beta = 1000
     method = 'TLP'
 
     w_init = z_value + 0
-    w,z1,z2,x1,x2,count = ADMM_algorithm_pMRF(y_train,trees_pred,km,sigma2_mean,w_init,lamb,beta,method,tol = 1e-4,K = 300)
+    w,z1,z2,x1,x2,count = ADMM_algorithm_pMRF(y_train,trees_pred,km,sigma2_mean,w_init,lamb,beta,method,tol = 1e-3,K = 300)
     # print(w)
     print(count)
+    print(f"number of active weight :{np.sum(w>0)}")
+    print(np.sum(w>0))
 
-    # w2,z12,z22,x12,x22,count2 = ADMM_algorithm_pMRF(y,y_preds,km,sigma2_mean,w_init,lamb,beta,method,tol = 1e-4,K = 100)
-
-    beta_opt, w_opt,cost_list,w_list,count_list = grid_search(y_train,trees_pred,km,sigma2_mean,w_init,lamb,method,tol = 1e-4,K = 300)
-    # # print(w_opt)
-    print(count_list)
-
+    t1 = time.time()
+    # beta_opt, w_opt,cost_list,w_list,count_list = grid_search(y_train,trees_pred,km,sigma2_mean,w_init,lamb,method,tol = 1e-3,K = 300)
+    # # # print(w_opt)
+    # # print(count_list)
+    # print(beta_opt)
+    # print(f"number of active weight :{np.sum(w_opt>0)}")
+    t2 = time.time()
+    print(f"cost of time :{t2 - t1}")
+    # print(calc_rmse(X_test,y_test,trees,w_opt))
     # 
-    # best_lambda,best_w = cv_search(X_val, y_train, y_val, trees,trees_pred)
+    best_lambda,best_w,w_opt_list,rmse_list,rmse_list_test = cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred)
+    t3 = time.time()
+    print(t3 - t2)
+
+
+    for w in w_opt_list:
+        print(np.sum(w>0))
+
+
+    print(rmse_list)
+    print(rmse_list_test)
+    print(calc_rmse(X_test,y_test,trees,z_value))
+    M = 1000
+    print(calc_rmse(X_test,y_test,trees,np.ones(M)/M))
+
+    # now the problem is that 
+    # active number of init result z_value is less than that 
+    # the theory result should be init result equal to that when lambda -> 0 
