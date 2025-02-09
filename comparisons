@@ -1,0 +1,170 @@
+from sklearn.ensemble import GradientBoostingRegressor, AdaBoostRegressor, StackingRegressor
+from sklearn.neural_network import MLPRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeRegressor
+
+# 1. Boosted Trees (Gradient Boosting)
+def BoostedTrees_train(X: np.ndarray, y: np.ndarray, 
+                      n_estimators: int = 100, 
+                      max_depth: int = 3) -> GradientBoostingRegressor:
+    """梯度提升树训练"""
+    model = GradientBoostingRegressor(n_estimators=n_estimators, 
+                                     max_depth=max_depth,
+                                     random_state=0)
+    model.fit(X, y.ravel())
+    return model
+
+def BoostedTrees_predict(model: GradientBoostingRegressor, 
+                        X: np.ndarray) -> np.ndarray:
+    """梯度提升树预测"""
+    return model.predict(X).reshape(-1, 1)
+
+# 2. Ensemble Model (Stacking)
+def Stacking_train(X: np.ndarray, y: np.ndarray,
+                  base_models: list = None,
+                  final_estimator = None) -> StackingRegressor:
+    """Stacking集成模型训练"""
+    if base_models is None:
+        base_models = [
+            ('dt3', DecisionTreeRegressor(max_depth=3)),
+            ('dt5', DecisionTreeRegressor(max_depth=5)),
+            ('rf', RandomForestRegressor(n_estimators=10, max_depth=3))
+        ]
+    if final_estimator is None:
+        final_estimator = LinearRegression()
+        
+    model = StackingRegressor(estimators=base_models,
+                             final_estimator=final_estimator)
+    model.fit(X, y.ravel())
+    return model
+
+def Stacking_predict(model: StackingRegressor, 
+                    X: np.ndarray) -> np.ndarray:
+    """Stacking集成模型预测"""
+    return model.predict(X).reshape(-1, 1)
+
+# 3. One Layer MLP
+def MLP_train(X: np.ndarray, y: np.ndarray,
+             hidden_size: int = 50,
+             max_iter: int = 1000) -> MLPRegressor:
+    """单层MLP训练"""
+    model = MLPRegressor(hidden_layer_sizes=(hidden_size,),
+                        max_iter=max_iter,
+                        random_state=0)
+    model.fit(X, y.ravel())
+    return model
+
+def MLP_predict(model: MLPRegressor, 
+               X: np.ndarray) -> np.ndarray:
+    """单层MLP预测"""
+    return model.predict(X).reshape(-1, 1)
+
+import os
+import json
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from pMRF_demo import *
+
+# 创建存储结果的文件夹
+if not os.path.exists("simulation_results4"):
+    os.mkdir("simulation_results4")
+
+# 固定参数
+p = 100          # 特征数
+M = 1000         # 随机森林的树数量
+N = 10          # 每组实验重复次数
+n_list = [100, 200, 300, 500, 1000] 
+max_features_list = [60, 70, 80, 90] 
+scenario = 'DGP3'
+
+# 新增模型参数配置
+BOOSTED_TREES_PARAMS = {'n_estimators': 100, 'max_depth': 3}
+STACKING_PARAMS = {'base_models': None, 'final_estimator': LinearRegression()}
+MLP_PARAMS = {'hidden_size': 50, 'max_iter': 1000}
+
+for max_features in max_features_list:
+    for n in n_list:
+        print(f"Running: max_features={max_features}, n={n}")
+
+        # 初始化结果存储列表
+        rmse_rf_list = []
+        rmse_mrf_list = []
+        rmse_bt_list = []    # Boosted Trees
+        rmse_stk_list = []   # Stacking
+        rmse_mlp_list = []   # MLP
+
+        for i in range(N):
+            # 数据生成
+            if scenario == 'DGP1':
+                X, y = DGP_1(n=n, p=p)
+            elif scenario == 'DGP2':
+                X, y = DGP_2(n=n, p=p)
+            elif scenario == 'DGP3':
+                X, y = DGP_3(n=n, p=p)
+
+            # 分割训练集和测试集
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=i)
+
+            # ===== 原有模型 =====
+            # RF
+            trees, trees_pred, km, sigma2 = RF_train(X=X_train, y=y_train, M=M, 
+                                                    max_depth=None, 
+                                                    max_features=max_features)
+            y_pred_rf = RF_predict(X=X_test, trees=trees)
+            rmse_rf = np.sqrt(np.mean((y_test - y_pred_rf) ** 2))
+            rmse_rf_list.append(rmse_rf)
+
+            # MRF
+            sigma2_mean = np.mean(sigma2)
+            w_mrf = cp_solver_MRF(y=y_train, y_preds=trees_pred, 
+                                 km=km, sigma2_mean=sigma2_mean)
+            y_pred_mrf = RF_predict_weighted(X=X_test, trees=trees, w=w_mrf)
+            rmse_mrf = np.sqrt(np.mean((y_test - y_pred_mrf) ** 2))
+            rmse_mrf_list.append(rmse_mrf)
+
+            # ===== 新增模型 =====
+            # Boosted Trees
+            bt_model = BoostedTrees_train(X_train, y_train, 
+                                         **BOOSTED_TREES_PARAMS)
+            y_pred_bt = BoostedTrees_predict(bt_model, X_test)
+            rmse_bt = np.sqrt(np.mean((y_test - y_pred_bt) ** 2))
+            rmse_bt_list.append(rmse_bt)
+
+            # Stacking
+            stk_model = Stacking_train(X_train, y_train, 
+                                      **STACKING_PARAMS)
+            y_pred_stk = Stacking_predict(stk_model, X_test)
+            rmse_stk = np.sqrt(np.mean((y_test - y_pred_stk) ** 2))
+            rmse_stk_list.append(rmse_stk)
+
+            # MLP
+            mlp_model = MLP_train(X_train, y_train, 
+                                 **MLP_PARAMS)
+            y_pred_mlp = MLP_predict(mlp_model, X_test)
+            rmse_mlp = np.sqrt(np.mean((y_test - y_pred_mlp) ** 2))
+            rmse_mlp_list.append(rmse_mlp)
+
+        # 结果存储
+        results = {
+            "rmse_rf_list": rmse_rf_list,
+            "rmse_mrf_list": rmse_mrf_list,
+            "rmse_bt_list": rmse_bt_list,
+            "rmse_stk_list": rmse_stk_list,
+            "rmse_mlp_list": rmse_mlp_list,
+            "params": {
+                "n": n,
+                "max_features": max_features,
+                "scenario": scenario,
+                "p": p,
+                "M": M,
+                "N": N,
+                "BOOSTED_TREES_PARAMS": BOOSTED_TREES_PARAMS,
+                "STACKING_PARAMS": str(STACKING_PARAMS),  # 避免JSON序列化问题
+                "MLP_PARAMS": MLP_PARAMS
+            }
+        }
+        # 保存为 JSON 文件
+        file_name = f"simulation_results4/rmse_{scenario}_n{n}_max_features_{max_features}.json"
+        with open(file_name, "w") as f:
+            json.dump(results, f)
