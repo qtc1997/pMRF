@@ -1,16 +1,70 @@
+from sklearn.ensemble import GradientBoostingRegressor, AdaBoostRegressor, StackingRegressor
+from sklearn.neural_network import MLPRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeRegressor
+
+# 1. Boosted Trees (Gradient Boosting)
+def BoostedTrees_train(X: np.ndarray, y: np.ndarray, 
+                      n_estimators: int = 100, 
+                      max_depth: int = 3) -> GradientBoostingRegressor:
+    """梯度提升树训练"""
+    model = GradientBoostingRegressor(n_estimators=n_estimators, 
+                                     max_depth=max_depth,
+                                     random_state=0)
+    model.fit(X, y.ravel())
+    return model
+
+def BoostedTrees_predict(model: GradientBoostingRegressor, 
+                        X: np.ndarray) -> np.ndarray:
+    """梯度提升树预测"""
+    return model.predict(X).reshape(-1, 1)
+
+# 2. Ensemble Model (Stacking)
+def Stacking_train(X: np.ndarray, y: np.ndarray,
+                  base_models: list = None,
+                  final_estimator = None) -> StackingRegressor:
+    """Stacking集成模型训练"""
+    if base_models is None:
+        base_models = [
+            ('dt3', DecisionTreeRegressor(max_depth=3)),
+            ('dt5', DecisionTreeRegressor(max_depth=5)),
+            ('rf', RandomForestRegressor(n_estimators=10, max_depth=3))
+        ]
+    if final_estimator is None:
+        final_estimator = LinearRegression()
+        
+    model = StackingRegressor(estimators=base_models,
+                             final_estimator=final_estimator)
+    model.fit(X, y.ravel())
+    return model
+
+def Stacking_predict(model: StackingRegressor, 
+                    X: np.ndarray) -> np.ndarray:
+    """Stacking集成模型预测"""
+    return model.predict(X).reshape(-1, 1)
+
+# 3. One Layer MLP
+def MLP_train(X: np.ndarray, y: np.ndarray,
+             hidden_size: int = 50,
+             max_iter: int = 1000) -> MLPRegressor:
+    """单层MLP训练"""
+    model = MLPRegressor(hidden_layer_sizes=(hidden_size,),
+                        max_iter=max_iter,
+                        random_state=0)
+    model.fit(X, y.ravel())
+    return model
+
+def MLP_predict(model: MLPRegressor, 
+               X: np.ndarray) -> np.ndarray:
+    """单层MLP预测"""
+    return model.predict(X).reshape(-1, 1)
+
 import os
 import json
 import numpy as np
 from sklearn.model_selection import train_test_split
-from pMRF_demo import *
-from sklearn.metrics import mean_squared_error
-from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.neighbors import KNeighborsRegressor
-import tensorflow as tf
-from tensorflow.keras import Sequential
-from tensorflow.keras.layers import Dense
+from pMRF_demo import *
 
 # 创建存储结果的文件夹
 if not os.path.exists("simulation_results4"):
@@ -19,55 +73,26 @@ if not os.path.exists("simulation_results4"):
 # 固定参数
 p = 100          # 特征数
 M = 1000         # 随机森林的树数量
-N = 100           # 每组实验重复次数
-n_list = [100, 200, 300, 500, 1000]  # 样本数
-max_features_list = [60, 70, 80, 90]  # max_features 可选值
+N = 10          # 每组实验重复次数
+n_list = [100, 200, 300, 500, 1000] 
+max_features_list = [60, 70, 80, 90] 
 scenario = 'DGP3'
 
-# Boosted Trees Model
-def boosted_trees_model(X_train, y_train, X_test):
-    model = GradientBoostingRegressor(n_estimators=1000, learning_rate=0.05, max_depth=20, random_state=42)
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    return y_pred, model
+# 新增模型参数配置
+BOOSTED_TREES_PARAMS = {'n_estimators': 100, 'max_depth': 3}
+STACKING_PARAMS = {'base_models': None, 'final_estimator': LinearRegression()}
+MLP_PARAMS = {'hidden_size': 50, 'max_iter': 1000}
 
-# Ensemble Model
-def ensemble_model(X_train, y_train, X_test):
-    model1 = LinearRegression().fit(X_train, y_train)
-    model2 = DecisionTreeRegressor(max_depth=5).fit(X_train, y_train)
-    model3 = KNeighborsRegressor(n_neighbors=5).fit(X_train, y_train)
-
-    # 单独预测
-    y_pred1 = model1.predict(X_test)
-    y_pred2 = model2.predict(X_test)
-    y_pred3 = model3.predict(X_test)
-
-    # 求平均作为最终预测
-    y_pred_ensemble = (y_pred1 + y_pred2 + y_pred3) / 3
-    return y_pred_ensemble, [model1, model2, model3]
-
-# One Layer MLP Model
-def one_layer_mlp_model(X_train, y_train, X_test):
-    model = Sequential([
-        Dense(64, activation='relu', input_shape=(X_train.shape[1],)),
-        Dense(32, activation='relu'),
-        Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mse')
-    model.fit(X_train, y_train, epochs=100, verbose=0, batch_size=32)
-    y_pred = model.predict(X_test).flatten()
-    return y_pred, model
-
-# 结果存储初始化
 for max_features in max_features_list:
     for n in n_list:
         print(f"Running: max_features={max_features}, n={n}")
 
+        # 初始化结果存储列表
         rmse_rf_list = []
         rmse_mrf_list = []
-        rmse_boosted_list = []
-        rmse_ensemble_list = []
-        rmse_mlp_list = []
+        rmse_bt_list = []    # Boosted Trees
+        rmse_stk_list = []   # Stacking
+        rmse_mlp_list = []   # MLP
 
         for i in range(N):
             # 数据生成
@@ -81,31 +106,42 @@ for max_features in max_features_list:
             # 分割训练集和测试集
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=i)
 
-            # RF 训练和预测
-            trees, trees_pred, km, sigma2 = RF_train(X=X_train, y=y_train, M=M, max_depth=None, max_features=max_features)
+            # ===== 原有模型 =====
+            # RF
+            trees, trees_pred, km, sigma2 = RF_train(X=X_train, y=y_train, M=M, 
+                                                    max_depth=None, 
+                                                    max_features=max_features)
             y_pred_rf = RF_predict(X=X_test, trees=trees)
             rmse_rf = np.sqrt(np.mean((y_test - y_pred_rf) ** 2))
             rmse_rf_list.append(rmse_rf)
 
-            # MRF 训练和预测
+            # MRF
             sigma2_mean = np.mean(sigma2)
-            w_mrf = cp_solver_MRF(y=y_train, y_preds=trees_pred, km=km, sigma2_mean=sigma2_mean)
+            w_mrf = cp_solver_MRF(y=y_train, y_preds=trees_pred, 
+                                 km=km, sigma2_mean=sigma2_mean)
             y_pred_mrf = RF_predict_weighted(X=X_test, trees=trees, w=w_mrf)
             rmse_mrf = np.sqrt(np.mean((y_test - y_pred_mrf) ** 2))
             rmse_mrf_list.append(rmse_mrf)
 
+            # ===== 新增模型 =====
             # Boosted Trees
-            y_pred_boosted, _ = boosted_trees_model(X_train, y_train, X_test)
-            rmse_boosted = np.sqrt(np.mean((y_test - y_pred_boosted) ** 2))
-            rmse_boosted_list.append(rmse_boosted)
+            bt_model = BoostedTrees_train(X_train, y_train, 
+                                         **BOOSTED_TREES_PARAMS)
+            y_pred_bt = BoostedTrees_predict(bt_model, X_test)
+            rmse_bt = np.sqrt(np.mean((y_test - y_pred_bt) ** 2))
+            rmse_bt_list.append(rmse_bt)
 
-            # Ensemble Model
-            y_pred_ensemble, _ = ensemble_model(X_train, y_train, X_test)
-            rmse_ensemble = np.sqrt(np.mean((y_test - y_pred_ensemble) ** 2))
-            rmse_ensemble_list.append(rmse_ensemble)
+            # Stacking
+            stk_model = Stacking_train(X_train, y_train, 
+                                      **STACKING_PARAMS)
+            y_pred_stk = Stacking_predict(stk_model, X_test)
+            rmse_stk = np.sqrt(np.mean((y_test - y_pred_stk) ** 2))
+            rmse_stk_list.append(rmse_stk)
 
-            # One Layer MLP
-            y_pred_mlp, _ = one_layer_mlp_model(X_train, y_train, X_test)
+            # MLP
+            mlp_model = MLP_train(X_train, y_train, 
+                                 **MLP_PARAMS)
+            y_pred_mlp = MLP_predict(mlp_model, X_test)
             rmse_mlp = np.sqrt(np.mean((y_test - y_pred_mlp) ** 2))
             rmse_mlp_list.append(rmse_mlp)
 
@@ -113,8 +149,8 @@ for max_features in max_features_list:
         results = {
             "rmse_rf_list": rmse_rf_list,
             "rmse_mrf_list": rmse_mrf_list,
-            "rmse_boosted_list": rmse_boosted_list,
-            "rmse_ensemble_list": rmse_ensemble_list,
+            "rmse_bt_list": rmse_bt_list,
+            "rmse_stk_list": rmse_stk_list,
             "rmse_mlp_list": rmse_mlp_list,
             "params": {
                 "n": n,
@@ -122,7 +158,10 @@ for max_features in max_features_list:
                 "scenario": scenario,
                 "p": p,
                 "M": M,
-                "N": N
+                "N": N,
+                "BOOSTED_TREES_PARAMS": BOOSTED_TREES_PARAMS,
+                "STACKING_PARAMS": str(STACKING_PARAMS),  # 避免JSON序列化问题
+                "MLP_PARAMS": MLP_PARAMS
             }
         }
         # 保存为 JSON 文件
