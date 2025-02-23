@@ -324,7 +324,7 @@ def grid_search(y:np.ndarray,y_preds:np.ndarray,km:np.ndarray,sigma2_mean:float,
 
     return beta_opt, w_opt,cost_list,w_list,count_list
 
-def cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred):
+def cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred,km,sigma2_mean,w_init,method):
     # 
     lambda_list = [0.0001,0.0005,0.001,0.002,0.003,0.005,0.01,0.02,0.03,0.05,0.1]
     rmse_list = []
@@ -439,7 +439,7 @@ if __name__ == "__main__":
     print(f"cost of time :{t2 - t1}")
     # print(calc_rmse(X_test,y_test,trees,w_opt))
     # 
-    best_lambda,best_w,w_opt_list,rmse_list,rmse_list_test = cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred)
+    best_lambda,best_w,w_opt_list,rmse_list,rmse_list_test = cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred,km,sigma2_mean,w_init,method)
     t3 = time.time()
     print(t3 - t2)
 

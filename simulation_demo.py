@@ -2,23 +2,34 @@ from sklearn.model_selection import train_test_split
 from pMRF_demo import *
 import json
 import numpy as np
+from comparison2 import *
 # 参数设置 ；
 # fixed
 p = 100 
 M = 1000
-N = 50
+N = 25
 method = 'TLP'
 
 # vary
 max_features = p + 0
-n_list = [100,200,300,400, 500,750,1000]
+# n_list = [100,200,300,400,500,750,1000]
+n_list = [100,200,300,500]
+# n_list = [400]
 # max_depth_list = [10,20,30,50,100,None]
 scenario_list = ['DGP1','DGP2','DGP3']
-max_features_list = [50,70,80,90,100]
+scenario_list = ['DGP3']
+# max_features_list = [90,100]
+max_features_list = [100]
 max_depth = None 
 
 # scenario = 'DGP_1'
-real_depth_arr = []
+
+# 新增模型参数配置
+# TODO max_depth 和 base models 是否要调参数？
+BOOSTED_TREES_PARAMS = {'n_estimators': 1000, 'max_depth': 300}
+STACKING_PARAMS = {'base_models': None, 'final_estimator': LinearRegression()}
+MLP_PARAMS = {'hidden_size': 50, 'max_iter': 1000}
+
 
 for scenario in scenario_list:
     for n in n_list:
@@ -29,10 +40,15 @@ for scenario in scenario_list:
 
             rmse_rf_list = []
             rmse_mrf_list = []
-            # rmse_pmrf_list = []
+            rmse_pmrf_list = []
+            rmse_bt_list = []    # Boosted Trees
+            rmse_stk_list = []   # Stacking
+            rmse_mlp_list = []   # MLP
 
-            tree_depth_list = []
-            # tree_leaf_num_list = []
+            pmrf_best_lambda_list = []
+            pmrf_count_list= []
+            mrf_count_list = []
+
 
 
             for i in range(N):
@@ -43,78 +59,99 @@ for scenario in scenario_list:
                 elif scenario == 'DGP3':
                     X, y = DGP_3(n=n,p=p)
 
-                # 分割训练集和测试集
-                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=i)
+                # 分割训练集和测试集 
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.4)
+                X_val, X_test, y_val, y_test = train_test_split(X_test, y_test, test_size=0.5)
 
-                # print(f"X_train.shape: {X_train.shape}, X_test.shape: {X_test.shape}, y_train.shape: {y_train.shape}, y_test.shape: {y_test.shape}")
-
+                # ===== 原有模型 =====
                 # RF
-                [trees, trees_pred, km, sigma2, tree_depth, tree_leaf_num] = RF_train(X=X_train, y=y_train, M=M, max_depth=max_depth, max_features=max_features)
-                tree_depth_list.append(tree_depth)
-                # tree_leaf_num_list.append(tree_leaf_num)
+                print("RF")
+                [trees, trees_pred, km, sigma2, tree_depth, tree_leaf_num] = RF_train(X=X_train, y=y_train, M=1000, max_depth=None, max_features=max_features)  
                 # 预测
-                y_pred = RF_predict(X=X_test, trees=trees)
+                y_pred_rf = RF_predict(X=X_test, trees=trees)
                 # 计算RMSE
-
-                print(f"y_test.shape: {y_test.shape}, y_pred.shape: {y_pred.shape}")
-                rmse_rf = np.sqrt(np.mean((y_test - y_pred)**2))
-                print(f"RF RMSE: {rmse_rf}")
-
-
-                # MRF
-                sigma2_mean = np.mean(sigma2)
-                # print(type(y_train), type(trees_pred), type(km), type(sigma2_mean))
-                w = cp_solver_MRF(y=y_train, y_preds=trees_pred, km=km, sigma2_mean=sigma2_mean)
-                # 预测
-                # print(w)
-                print(w.shape)
-                y_pred = RF_predict_weighted(X=X_test, trees=trees, w=w)
-                # 计算RMSE
-                print(f"y_test.shape: {y_test.shape}, y_pred.shape: {y_pred.shape}")
-                rmse_mrf = np.sqrt(np.mean((y_test - y_pred)**2))
-                print(f"MRF RMSE: {rmse_mrf}")
-
-            
-
-
-                # # pMRF
-                # lamb = 0.003
-                # beta_opt, w_opt,cost_list,w_list = grid_search(y=y_train, y_preds=trees_pred, km=km, sigma2_mean=sigma2_mean, w_init=w, lamb=lamb, method=method)
-
-                # print(f"beta_opt: {beta_opt}, w_opt: {w_opt}")
-
-                # # print(w_opt.shape)
-
-                # y_pred = RF_predict_weighted(X=X_test, trees=trees, w=w_opt)
-                # rmse_pmrf = np.sqrt(np.mean((y_test - y_pred)**2))
-                # print(f"pMRF RMSE: {rmse_pmrf}")
-
-
+                rmse_rf = np.sqrt(np.mean((y_test - y_pred_rf) ** 2))
                 rmse_rf_list.append(rmse_rf)
+                print(rmse_rf)
+                
+                # MRF
+                print("MRF")
+                sigma2_mean = np.mean(sigma2)
+                w_mrf = cp_solver_MRF(y=y_train, y_preds=trees_pred, km=km, sigma2_mean=sigma2_mean)
+                y_pred_mrf = RF_predict_weighted(X=X_test, trees=trees, w=w_mrf)
+                rmse_mrf = np.sqrt(np.mean((y_test - y_pred_mrf) ** 2))
                 rmse_mrf_list.append(rmse_mrf)
-                # rmse_pmrf_list.append(rmse_pmrf)
-            dict = {
+                print(rmse_mrf)
+                mrf_count_list.append(float(np.sum(w_mrf>0)))
+
+
+                # ===== 新增模型 =====
+                # Boosted Trees
+                print("Boosted Trees")
+                bt_model = BoostedTrees_train(X_train, y_train, 
+                                            **BOOSTED_TREES_PARAMS)
+                y_pred_bt = BoostedTrees_predict(bt_model, X_test)
+                rmse_bt = np.sqrt(np.mean((y_test - y_pred_bt) ** 2))
+                rmse_bt_list.append(rmse_bt)
+                print(rmse_bt)
+
+                # Stacking
+                print("Stacking")
+                stk_model = Stacking_train(X_train, y_train, 
+                                        **STACKING_PARAMS)
+                print(stk_model.final_estimator_.coef_)
+                y_pred_stk = Stacking_predict(stk_model, X_test)
+                rmse_stk = np.sqrt(np.mean((y_test - y_pred_stk) ** 2))
+                rmse_stk_list.append(rmse_stk)
+                print(rmse_stk)
+
+                # MLP
+                print("MLP")
+                mlp_model = MLP_train(X_train, y_train, 
+                                    **MLP_PARAMS)
+                y_pred_mlp = MLP_predict(mlp_model, X_test)
+                rmse_mlp = np.sqrt(np.mean((y_test - y_pred_mlp) ** 2))
+                rmse_mlp_list.append(rmse_mlp)
+                print(rmse_mlp)
+
+                # ===== Our Model =====
+                # pMRF
+                print("pMRF")
+                w_init = w_mrf + 0
+                best_lambda,best_w,w_opt_list,rmse_list,rmse_list_test = cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred,km,sigma2_mean,w_init,method)
+                y_pred_pmrf = RF_predict_weighted(X=X_test, trees=trees, w=best_w)
+                rmse_pmrf = np.sqrt(np.mean((y_test - y_pred_pmrf) ** 2))
+                rmse_pmrf_list.append(rmse_pmrf)
+                print(rmse_pmrf)
+                pmrf_best_lambda_list.append(best_lambda)
+                pmrf_count_list.append(float(np.sum(best_w>0)))
+
+            # 结果存储
+            results = {
                 "rmse_rf_list": rmse_rf_list,
                 "rmse_mrf_list": rmse_mrf_list,
-                # "rmse_pmrf_list": rmse_pmrf_list
+                "rmse_pmrf_list": rmse_pmrf_list,
+                "rmse_bt_list": rmse_bt_list,
+                "rmse_stk_list": rmse_stk_list,
+                "rmse_mlp_list": rmse_mlp_list,
+                "mrf_count_list": mrf_count_list,
+                "pmrf_count_list": pmrf_count_list,
+                "pmrf_best_lambda_list": pmrf_best_lambda_list,
                 "params": {
                     "n": n,
-                    "max_depth": max_depth,
                     "max_features": max_features,
-                    "method": method,
                     "scenario": scenario,
+                    "penalty_mehod":method,
                     "p": p,
                     "M": M,
-                    "N": N
+                    "N": N,
+                    "BOOSTED_TREES_PARAMS": BOOSTED_TREES_PARAMS,
+                    "STACKING_PARAMS": str(STACKING_PARAMS),  # 避免JSON序列化问题
+                    "MLP_PARAMS": MLP_PARAMS
                 }
             }
-            # 变成json文件存储
-            file_name = f"./simulation_results/rmse_{scenario}_{n}_{max_depth}_{max_features}.json"
-            with open(file_name, 'w') as f:
-                json.dump(dict, f)
-            print("tree_depth_list:",np.mean(tree_depth_list))
-            # print(np.mean(tree_depth_list))   
-            # real_depth_arr.append(np.mean(tree_depth_list))
-            # print("tree_leaf_num_list:",np.mean(tree_leaf_num_list))
-
+            # 保存为 JSON 文件
+            file_name = f"simulation_results4/rmse_{scenario}_n{n}_max_features_{max_features}.json"
+            with open(file_name, "w") as f:
+                json.dump(results, f)
 
