@@ -6,6 +6,7 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
+from sklearn.neighbors import KNeighborsRegressor
 
 
 # 1. Boosted Trees (Gradient Boosting)

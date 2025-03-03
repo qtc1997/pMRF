@@ -287,6 +287,19 @@ def ADMM_algorithm_pMRF(y:np.ndarray,y_preds:np.ndarray,km:np.ndarray,sigma2_mea
     
     return(w,z1_new,z2_new,x1,x2,count)
 
+def ADMM_algorithm_pMRF_fast(w_init:np.ndarray,lamb:float):
+    """
+    """
+
+    w = w_init.copy()
+    w[abs(w)<lamb] = 0 
+
+    w = w/sum(w)
+
+    return w
+
+
+    
 
 def grid_search(y:np.ndarray,y_preds:np.ndarray,km:np.ndarray,sigma2_mean:float,w_init:np.ndarray,lamb:float,method:str,tol = 1e-4,K = 1e4):
     """
@@ -324,16 +337,18 @@ def grid_search(y:np.ndarray,y_preds:np.ndarray,km:np.ndarray,sigma2_mean:float,
 
     return beta_opt, w_opt,cost_list,w_list,count_list
 
-def cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred,km,sigma2_mean,w_init,method):
+
+
+def cv_search_fast(X_val, X_test,y_train, y_val,y_test,trees,trees_pred,w_init):
     # 
-    lambda_list = [0.0001,0.0005,0.001,0.002,0.003,0.005,0.01,0.02,0.03,0.05,0.1]
+    lambda_list = [0.0001,0.0002,0.0003,0.0005,0.001,0.002,0.003,0.004,0.005,0.006,0.007,0.008,0.009,0.01,0.02,0.03]
     rmse_list = []
     w_opt_list = []
     rmse_list_test = []
     for lambda_ in lambda_list:
         print('-'*10)
         print(lambda_)
-        beta_opt, w_opt,cost_list,w_list,count_list = grid_search(y_train,trees_pred,km,sigma2_mean,w_init,lambda_,method,tol = 1e-3,K = 300)
+        w_opt = ADMM_algorithm_pMRF_fast(w_init,lambda_)
         w_opt_list.append(w_opt)
 
         # 在val上的表现
@@ -347,8 +362,36 @@ def cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred,km,sigma2_mea
         rmse_test = np.sqrt(np.mean((y_test - y_pred_test)**2))
         rmse_list_test.append(rmse_test)
 
+    idx = np.argmin(np.array(rmse_list))
+    best_lambda = lambda_list[idx]
+    best_w = w_opt_list[idx]
+
+    return(best_lambda,best_w,w_opt_list,rmse_list,rmse_list_test)
 
 
+
+def cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred,km,sigma2_mean,w_init,method):
+    # 
+    lambda_list = [0.0001,0.0005,0.001,0.002,0.003,0.005,0.01,0.02,0.03,0.05,0.1]
+    rmse_list = []
+    w_opt_list = []
+    rmse_list_test = []
+    for lambda_ in lambda_list:
+        print('-'*10)
+        print(lambda_)
+        beta_opt, w_opt,cost_list,w_list,count_list = grid_search(y_train,trees_pred,km,sigma2_mean,w_init,lambda_,method,tol = 1e-3,K = 100)
+        w_opt_list.append(w_opt)
+
+        # 在val上的表现
+        y_pred_val = RF_predict_weighted(X=X_val, trees=trees, w=w_opt)
+        rmse = np.sqrt(np.mean((y_val - y_pred_val)**2))
+        rmse_list.append(rmse)
+
+
+        # 在test 上的表现 
+        y_pred_test = RF_predict_weighted(X=X_test, trees=trees, w=w_opt)
+        rmse_test = np.sqrt(np.mean((y_test - y_pred_test)**2))
+        rmse_list_test.append(rmse_test)
 
     idx = np.argmin(np.array(rmse_list))
     best_lambda = lambda_list[idx]
@@ -395,10 +438,10 @@ if __name__ == "__main__":
 
     # 计算每个树中根结点和叶结点的个数 作为 mallows准则里的km
     km2 = [tree.tree_.node_count for tree in trees]
-    print("每个树中根结点和叶结点的个数: ", km2)
+    # print("每个树中根结点和叶结点的个数: ", km2)
 
     # print(km)
-    print("每个树的sigma2: ", sigma2)
+    # print("每个树的sigma2: ", sigma2)
     sigma2_mean = np.mean(sigma2)
     print("sigma2的均值: ", sigma2_mean)
 
@@ -414,42 +457,30 @@ if __name__ == "__main__":
     print(calc_rmse(X_test,y_test,trees,z_value))
 
     # 求解pMRF
-    # 给lambda
-    # 给beta
-    # 给method
-
-    lamb =  0.01
-    beta = 1000
-    method = 'TLP'
-
+    # 1. 
+    lamb =  0.0001
     w_init = z_value + 0
-    w,z1,z2,x1,x2,count = ADMM_algorithm_pMRF(y_train,trees_pred,km,sigma2_mean,w_init,lamb,beta,method,tol = 1e-3,K = 300)
+
+    # beta = 1000
+    # method = 'TLP'
+    # w,z1,z2,x1,x2,count = ADMM_algorithm_pMRF(y_train,trees_pred,km,sigma2_mean,w_init,lamb,beta,method,tol = 1e-3,K = 100)
     # print(w)
-    print(count)
-    print(f"number of active weight :{np.sum(w>0)}")
+    # print(count)
+    # print(f"number of active weight :{np.sum(w>0)}")
+
+    w = ADMM_algorithm_pMRF_fast(w_init,lamb)
     print(np.sum(w>0))
 
-    t1 = time.time()
-    # beta_opt, w_opt,cost_list,w_list,count_list = grid_search(y_train,trees_pred,km,sigma2_mean,w_init,lamb,method,tol = 1e-3,K = 300)
-    # # # print(w_opt)
-    # # print(count_list)
-    # print(beta_opt)
-    # print(f"number of active weight :{np.sum(w_opt>0)}")
-    t2 = time.time()
-    print(f"cost of time :{t2 - t1}")
-    # print(calc_rmse(X_test,y_test,trees,w_opt))
-    # 
-    best_lambda,best_w,w_opt_list,rmse_list,rmse_list_test = cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred,km,sigma2_mean,w_init,method)
-    t3 = time.time()
-    print(t3 - t2)
+    # 2
+    # best_lambda,best_w,w_opt_list,rmse_list,rmse_list_test = cv_search(X_val, X_test,y_train, y_val,y_test,trees,trees_pred,km,sigma2_mean,w_init,method)
+    best_lambda,best_w,w_opt_list,rmse_list,rmse_list_test = cv_search_fast(X_val, X_test,y_train, y_val,y_test,trees,trees_pred,w_init)
 
 
     for w in w_opt_list:
         print(np.sum(w>0))
 
 
-    print(rmse_list)
-    print(rmse_list_test)
+    print(calc_rmse(X_test,y_test,trees,w))
     print(calc_rmse(X_test,y_test,trees,z_value))
     M = 1000
     print(calc_rmse(X_test,y_test,trees,np.ones(M)/M))
