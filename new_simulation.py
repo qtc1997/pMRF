@@ -8,12 +8,12 @@ from comparison3 import *
 # fixed
 p = 100 
 M = 1000
-N = 50
+N = 1
 method = 'TLP'
 
 # vary
 max_features = p + 0
-n_list = [100,200,300,400,500,750,1000]
+n_list = [100,200,300,400,500,700,1000]
 # n_list = [400]
 # max_depth_list = [10,20,30,50,100,None]
 scenario_list = ['DGP1','DGP2','DGP3']
